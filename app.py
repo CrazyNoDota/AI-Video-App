@@ -6,6 +6,9 @@ from gradio_client import Client, handle_file
 import threading
 import shutil
 import webbrowser
+import requests
+import json
+import time
 
 # Set appearance mode and color theme
 ctk.set_appearance_mode("Dark")
@@ -16,16 +19,27 @@ class VideoApp(ctk.CTk):
         super().__init__()
 
         self.title("AI Video Generator")
-        self.geometry("600x700")
+        self.geometry("600x780")
         self.resizable(False, False)
 
         self.image_path = None
 
         # --- UI Elements ---
         
+        # 0. Backend Mode
+        self.mode_label = ctk.CTkLabel(self, text="0. Select Processing Mode:", font=("Arial", 14, "bold"))
+        self.mode_label.pack(pady=(20, 5), padx=20, anchor="w")
+        
+        self.mode_var = ctk.StringVar(value="Cloud (Colab)")
+        self.mode_radio_cloud = ctk.CTkRadioButton(self, text="Cloud (Colab) - Uses internet, no GPU needed", variable=self.mode_var, value="Cloud (Colab)", command=self.toggle_mode)
+        self.mode_radio_cloud.pack(pady=5, padx=20, anchor="w")
+        
+        self.mode_radio_local = ctk.CTkRadioButton(self, text="Local (ComfyUI) - Uses your GTX 1070 Ti (SVD only)", variable=self.mode_var, value="Local (ComfyUI)", command=self.toggle_mode)
+        self.mode_radio_local.pack(pady=5, padx=20, anchor="w")
+
         # 1. Colab Open Button
         self.colab_label = ctk.CTkLabel(self, text="1. Open Cloud Environment:", font=("Arial", 14, "bold"))
-        self.colab_label.pack(pady=(20, 5), padx=20, anchor="w")
+        self.colab_label.pack(pady=(15, 5), padx=20, anchor="w")
         
         self.colab_btn = ctk.CTkButton(self, text="🌐 Open Google Colab", 
                                        command=lambda: webbrowser.open("https://colab.research.google.com/"),
@@ -41,7 +55,7 @@ class VideoApp(ctk.CTk):
 
         # 3. Model Selection
         self.model_label = ctk.CTkLabel(self, text="3. Select AI Model:", font=("Arial", 14, "bold"))
-        self.model_label.pack(pady=(20, 5), padx=20, anchor="w")
+        self.model_label.pack(pady=(15, 5), padx=20, anchor="w")
         
         self.model_var = ctk.StringVar(value="Stable Video Diffusion (Image-to-Video)")
         self.model_dropdown = ctk.CTkOptionMenu(self, variable=self.model_var, 
@@ -53,9 +67,9 @@ class VideoApp(ctk.CTk):
                                                 width=560)
         self.model_dropdown.pack(pady=5, padx=20)
 
-        # 3. Image Upload
-        self.image_label = ctk.CTkLabel(self, text="3. Select Starting Image (for SVD):", font=("Arial", 14, "bold"))
-        self.image_label.pack(pady=(20, 5), padx=20, anchor="w")
+        # 4. Image Upload
+        self.image_label = ctk.CTkLabel(self, text="4. Select Starting Image (for SVD):", font=("Arial", 14, "bold"))
+        self.image_label.pack(pady=(15, 5), padx=20, anchor="w")
         
         self.image_btn = ctk.CTkButton(self, text="Browse Image", command=self.select_image, fg_color="gray40", hover_color="gray30")
         self.image_btn.pack(pady=5, padx=20, anchor="w")
@@ -63,19 +77,36 @@ class VideoApp(ctk.CTk):
         self.image_preview_label = ctk.CTkLabel(self, text="No image selected")
         self.image_preview_label.pack(pady=5, padx=20, anchor="w")
 
-        # 4. Prompt
-        self.prompt_label = ctk.CTkLabel(self, text="4. Enter Prompt (for LTX):", font=("Arial", 14, "bold"))
-        self.prompt_label.pack(pady=(20, 5), padx=20, anchor="w")
+        # 5. Prompt
+        self.prompt_label = ctk.CTkLabel(self, text="5. Enter Prompt (for LTX):", font=("Arial", 14, "bold"))
+        self.prompt_label.pack(pady=(15, 5), padx=20, anchor="w")
         
-        self.prompt_entry = ctk.CTkTextbox(self, height=80, width=560)
+        self.prompt_entry = ctk.CTkTextbox(self, height=60, width=560)
         self.prompt_entry.pack(pady=5, padx=20)
 
-        # 5. Generate Button
+        # 6. Generate Button
         self.generate_btn = ctk.CTkButton(self, text="🚀 Generate Video", command=self.start_generation, height=50, font=("Arial", 16, "bold"))
-        self.generate_btn.pack(pady=(30, 10), padx=20)
+        self.generate_btn.pack(pady=(20, 10), padx=20)
         
         self.status_label = ctk.CTkLabel(self, text="", text_color="yellow", font=("Arial", 12))
         self.status_label.pack(pady=5, padx=20)
+
+        self.toggle_mode()
+
+    def toggle_mode(self):
+        mode = self.mode_var.get()
+        if mode == "Local (ComfyUI)":
+            self.url_entry.configure(state="disabled")
+            self.colab_btn.configure(state="disabled")
+            # Force SVD model since local LTX is too heavy
+            self.model_var.set("Stable Video Diffusion (Image-to-Video)")
+            self.model_dropdown.configure(state="disabled")
+            self.prompt_entry.configure(state="disabled")
+        else:
+            self.url_entry.configure(state="normal")
+            self.colab_btn.configure(state="normal")
+            self.model_dropdown.configure(state="normal")
+            self.prompt_entry.configure(state="normal")
 
     def select_image(self):
         file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.png *.jpg *.jpeg")])
@@ -84,42 +115,43 @@ class VideoApp(ctk.CTk):
             self.image_preview_label.configure(text=f"Selected: {os.path.basename(file_path)}")
 
     def start_generation(self):
+        mode = self.mode_var.get()
         url = self.url_entry.get().strip()
         model = self.model_var.get()
         prompt = self.prompt_entry.get("1.0", "end-1c").strip()
         image = self.image_path
 
-        if not url:
-            messagebox.showerror("Error", "Please paste the Gradio Link first!")
-            return
-            
-        if "colab.research.google.com" in url or "huggingface.co" in url:
-            messagebox.showerror("Wrong Link", "Oops! You pasted the Google Colab Notebook link.\n\nYou need to paste the Gradio Live link.\n1. Click the Open Colab button.\n2. In Colab, click 'Run All'.\n3. Wait for the cell at the bottom to finish loading.\n4. Copy the link that looks like 'https://xxxxxx.gradio.live' and paste it here.")
-            return
+        if mode == "Cloud (Colab)":
+            if not url:
+                messagebox.showerror("Error", "Please paste the Gradio Link first!")
+                return
+            if "colab.research.google.com" in url or "huggingface.co" in url:
+                messagebox.showerror("Wrong Link", "Oops! You pasted the Google Colab Notebook link.\n\nYou need to paste the Gradio Live link.\n1. Click the Open Colab button.\n2. In Colab, click 'Run All'.\n3. Wait for the cell at the bottom to finish loading.\n4. Copy the link that looks like 'https://xxxxxx.gradio.live' and paste it here.")
+                return
 
-        if model == "Stable Video Diffusion (Image-to-Video)" and not image:
+        if "Stable Video Diffusion" in model and not image:
             messagebox.showerror("Error", "Please select an image for SVD!")
             return
             
-        if "LTX-Video" in model and not prompt:
+        if mode == "Cloud (Colab)" and "LTX-Video" in model and not prompt:
             messagebox.showerror("Error", "Please enter a prompt for LTX-Video!")
             return
 
         self.generate_btn.configure(state="disabled", text="⏳ Generating... Please wait (might take minutes)")
-        self.status_label.configure(text="Sending request to Colab...")
         
-        # Run in background thread to avoid freezing UI
-        threading.Thread(target=self.generate_video_task, args=(url, model, prompt, image), daemon=True).start()
+        if mode == "Cloud (Colab)":
+            self.status_label.configure(text="Sending request to Colab...")
+            threading.Thread(target=self.generate_cloud_task, args=(url, model, prompt, image), daemon=True).start()
+        else:
+            self.status_label.configure(text="Sending request to Local ComfyUI...")
+            threading.Thread(target=self.generate_local_task, args=(image,), daemon=True).start()
 
-    def generate_video_task(self, url, model, prompt, image):
+    def generate_cloud_task(self, url, model, prompt, image):
         try:
             client = Client(url)
-            
-            # Map input to gradio predict
             self.status_label.configure(text="Processing on cloud GPU...")
             
             img_input = handle_file(image) if image else None
-            
             result_video_path = client.predict(
                 image=img_input,
                 prompt=prompt,
@@ -127,27 +159,90 @@ class VideoApp(ctk.CTk):
                 api_name="/predict"
             )
             
-            # Copy result to app folder
-            app_folder = os.path.dirname(os.path.abspath(__file__))
-            final_path = os.path.join(app_folder, "Generated_Video.mp4")
-            
-            # If multiple generations, append numbers
-            counter = 1
-            while os.path.exists(final_path):
-                final_path = os.path.join(app_folder, f"Generated_Video_{counter}.mp4")
-                counter += 1
-                
-            shutil.copy(result_video_path, final_path)
-            
-            self.status_label.configure(text=f"✅ Done! Saved as {os.path.basename(final_path)}")
-            messagebox.showinfo("Success!", f"Video generated and saved in the app folder as:\n{os.path.basename(final_path)}")
-            
+            self.save_video(result_video_path)
         except Exception as e:
             self.status_label.configure(text="❌ Error occurred")
-            messagebox.showerror("Generation Error", f"Could not generate video. Check Colab link or Colab logs.\nError: {str(e)}")
-            
+            messagebox.showerror("Generation Error", f"Could not generate video on cloud.\nError: {str(e)}")
         finally:
             self.generate_btn.configure(state="normal", text="🚀 Generate Video")
+
+    def generate_local_task(self, image_path):
+        try:
+            comfy_url = "http://127.0.0.1:8000"
+            app_folder = os.path.dirname(os.path.abspath(__file__))
+            workflow_path = os.path.join(app_folder, "SVD_Workflow.json")
+            
+            if not os.path.exists(workflow_path):
+                raise Exception("SVD_Workflow.json not found in app folder.")
+
+            self.status_label.configure(text="Uploading image to Local ComfyUI...")
+            
+            # 1. Upload Image
+            with open(image_path, "rb") as f:
+                res = requests.post(f"{comfy_url}/upload/image", files={"image": f})
+            if res.status_code != 200:
+                raise Exception(f"Failed to upload image. Is ComfyUI running? {res.text}")
+            uploaded_filename = res.json()["name"]
+
+            # 2. Load and modify workflow
+            with open(workflow_path, "r", encoding="utf-8") as f:
+                workflow = json.load(f)
+                
+            # Set the image node
+            workflow["1"]["inputs"]["image"] = uploaded_filename
+
+            # 3. Queue Prompt
+            self.status_label.configure(text="Processing on Local GTX 1070 Ti...")
+            p = {"prompt": workflow}
+            res = requests.post(f"{comfy_url}/prompt", json=p)
+            if res.status_code != 200:
+                raise Exception(f"Failed to queue prompt: {res.text}")
+            
+            prompt_id = res.json()["prompt_id"]
+
+            # 4. Poll history until done
+            output_filename = None
+            while True:
+                time.sleep(2)
+                h_res = requests.get(f"{comfy_url}/history/{prompt_id}")
+                if h_res.status_code == 200:
+                    history = h_res.json()
+                    if prompt_id in history:
+                        outputs = history[prompt_id].get("outputs", {})
+                        if "7" in outputs and "gifs" in outputs["7"]:
+                            output_filename = outputs["7"]["gifs"][0]["filename"]
+                            break
+                        else:
+                            raise Exception("No video generated in the output nodes.")
+
+            # 5. Download the video
+            self.status_label.configure(text="Downloading video from ComfyUI...")
+            vid_res = requests.get(f"{comfy_url}/view?filename={output_filename}&type=output")
+            
+            temp_vid = os.path.join(app_folder, "temp_local.mp4")
+            with open(temp_vid, "wb") as f:
+                f.write(vid_res.content)
+
+            self.save_video(temp_vid)
+
+        except Exception as e:
+            self.status_label.configure(text="❌ Error occurred")
+            messagebox.showerror("Generation Error", f"Could not generate locally.\nError: {str(e)}")
+        finally:
+            self.generate_btn.configure(state="normal", text="🚀 Generate Video")
+
+    def save_video(self, source_path):
+        app_folder = os.path.dirname(os.path.abspath(__file__))
+        final_path = os.path.join(app_folder, "Generated_Video.mp4")
+        
+        counter = 1
+        while os.path.exists(final_path):
+            final_path = os.path.join(app_folder, f"Generated_Video_{counter}.mp4")
+            counter += 1
+            
+        shutil.copy(source_path, final_path)
+        self.status_label.configure(text=f"✅ Done! Saved as {os.path.basename(final_path)}")
+        messagebox.showinfo("Success!", f"Video generated and saved in the app folder as:\n{os.path.basename(final_path)}")
 
 if __name__ == "__main__":
     app = VideoApp()
