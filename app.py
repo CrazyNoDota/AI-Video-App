@@ -162,7 +162,7 @@ class VideoApp(ctk.CTk):
             self.save_video(result_video_path)
         except Exception as e:
             self.status_label.configure(text="❌ Error occurred")
-            messagebox.showerror("Generation Error", f"Could not generate video on cloud.\nError: {str(e)}")
+            self.after(0, lambda e_msg=str(e): messagebox.showerror("Generation Error", f"Could not generate video on cloud.\nError: {e_msg}"))
         finally:
             self.generate_btn.configure(state="normal", text="🚀 Generate Video")
 
@@ -227,7 +227,7 @@ class VideoApp(ctk.CTk):
 
         except Exception as e:
             self.status_label.configure(text="❌ Error occurred")
-            messagebox.showerror("Generation Error", f"Could not generate locally.\nError: {str(e)}")
+            self.after(0, lambda e_msg=str(e): messagebox.showerror("Generation Error", f"Could not generate locally.\nError: {e_msg}"))
         finally:
             self.generate_btn.configure(state="normal", text="🚀 Generate Video")
 
@@ -242,7 +242,7 @@ class VideoApp(ctk.CTk):
             
         shutil.copy(source_path, final_path)
         self.status_label.configure(text=f"✅ Done! Saved as {os.path.basename(final_path)}")
-        messagebox.showinfo("Success!", f"Video generated and saved in the app folder as:\n{os.path.basename(final_path)}")
+        self.after(0, lambda p=final_path: messagebox.showinfo("Success!", f"Video generated and saved in the app folder as:\n{os.path.basename(p)}"))
 
 if __name__ == "__main__":
     app = VideoApp()
